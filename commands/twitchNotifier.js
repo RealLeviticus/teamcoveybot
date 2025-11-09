@@ -22,6 +22,7 @@ export async function setupTwitchNotifier(client) {
     return;
   }
 
+  // ---- local state + helpers ----
   function readState() {
     try { return JSON.parse(fs.readFileSync(TWITCH_STATE_FILE, 'utf8')); }
     catch { return {}; }
@@ -49,6 +50,10 @@ export async function setupTwitchNotifier(client) {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: params
     });
+    if (!res.ok) {
+      const t = await res.text().catch(() => '');
+      throw new Error(`Twitch token failed ${res.status}: ${t.slice(0,120)}`);
+    }
     const data = await res.json();
     appToken = data.access_token;
     tokenExpiry = Date.now() + (data.expires_in - 60) * 1000;
@@ -60,33 +65,38 @@ export async function setupTwitchNotifier(client) {
     const res = await fetch(`https://api.twitch.tv/helix/streams?user_login=${login}`, {
       headers: { 'Client-ID': twitchCfg.clientId, Authorization: `Bearer ${token}` }
     });
+    if (!res.ok) {
+      const t = await res.text().catch(() => '');
+      throw new Error(`Twitch streams error ${res.status}: ${t.slice(0,120)}`);
+    }
     const json = await res.json();
     return Array.isArray(json.data) && json.data.length ? json.data[0] : null;
   }
 
+  // ---- shared send function (exported below) ----
+  async function _sendTwitchNotification(login, title, channel) {
+    const url = `https://twitch.tv/${login}`;
+    const mention = twitchCfg.roleId ? `<@&${twitchCfg.roleId}> ` : '';
+    await channel.send(`${mention}🔴 **${login}** is LIVE: **${title || 'Live now!'}**\n${url}`);
+  }
+
   async function notifyIfLive(channel) {
-    for (const login of twitchCfg.channels) {
+    for (const loginRaw of twitchCfg.channels) {
+      const login = String(loginRaw).toLowerCase();
       try {
-        const stream = await fetchStream(login.toLowerCase());
+        const stream = await fetchStream(login);
         const current = state[login] || { live: false, lastId: null };
 
         if (stream && !current.live) {
-          const title = stream.title || 'Live now!';
-          const url = `https://twitch.tv/${login}`;
-          const mention = twitchCfg.roleId ? `<@&${twitchCfg.roleId}> ` : '';
-          await channel.send(`${mention}🔴 **${login}** is LIVE: **${title}**\n${url}`);
-
+          await _sendTwitchNotification(login, stream.title, channel);
           state[login] = { live: true, lastId: stream.id || null };
           writeState(state);
         } else if (!stream && current.live) {
           state[login] = { live: false, lastId: null };
           writeState(state);
         } else if (stream && current.live && current.lastId !== stream.id) {
-          const title = stream.title || 'Live now!';
-          const url = `https://twitch.tv/${login}`;
-          const mention = twitchCfg.roleId ? `<@&${twitchCfg.roleId}> ` : '';
-          await channel.send(`${mention}🔴 **${login}** is LIVE: **${title}**\n${url}`);
-
+          // stream restarted/new stream id
+          await _sendTwitchNotification(login, stream.title, channel);
           state[login] = { live: true, lastId: stream.id || null };
           writeState(state);
         }
@@ -96,6 +106,7 @@ export async function setupTwitchNotifier(client) {
     }
   }
 
+  // boot-time wiring
   client.once('ready', async () => {
     try {
       const chan = await client.channels.fetch(twitchCfg.discordChannelId);
@@ -110,4 +121,28 @@ export async function setupTwitchNotifier(client) {
       console.warn('⚠️ Twitch notifier init failed:', e.message);
     }
   });
+
+  // expose helpers via exports (bound to this config)
+  _exported.sendTwitchNotification = async (client, { user_name, title }) => {
+    const chan = await client.channels.fetch(twitchCfg.discordChannelId).catch(() => null);
+    if (!chan || !chan.send) throw new Error('Notification channel not found or not text-capable.');
+    await _sendTwitchNotification(String(user_name || 'TestStreamer'), title || 'Test Stream', chan);
+  };
+
+  _exported.checkTwitchNow = async (client) => {
+    const chan = await client.channels.fetch(twitchCfg.discordChannelId).catch(() => null);
+    if (!chan || !chan.send) throw new Error('Notification channel not found or not text-capable.');
+    await notifyIfLive(chan);
+  };
 }
+
+// ---- public exports (populated after setupTwitchNotifier runs) ----
+const _exported = {
+  /** Send a manual/test notification that uses the same formatting as the real notifier */
+  sendTwitchNotification: async () => { throw new Error('setupTwitchNotifier has not run yet'); },
+  /** Run one immediate poll cycle right now */
+  checkTwitchNow: async () => { throw new Error('setupTwitchNotifier has not run yet'); }
+};
+
+export const sendTwitchNotification = (...args) => _exported.sendTwitchNotification(...args);
+export const checkTwitchNow = (...args) => _exported.checkTwitchNow(...args);
