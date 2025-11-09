@@ -1,8 +1,6 @@
-// index.js
-// Simple Discord bot reading its token from config.json
-
-const fs = require('fs');
-const { Client, GatewayIntentBits, Events } = require('discord.js');
+// index.js (ESM version)
+import fs from 'fs';
+import { Client, GatewayIntentBits, Events } from 'discord.js';
 
 // Read token from config.json
 let token = null;
