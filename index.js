@@ -2,6 +2,7 @@
 import fs from 'fs';
 import { Client, GatewayIntentBits, Events, Collection } from 'discord.js';
 import { setupTwitchNotifier } from './commands/twitchNotifier.js';
+import { registerSlashCommands } from './registerCommands.js';
 
 const CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const LAST_FILE = '.last-commit';
@@ -9,7 +10,6 @@ const LAST_FILE = '.last-commit';
 // ===== LOAD CONFIG =====
 let config;
 let token = null;
-
 try {
   const raw = fs.readFileSync('./config.json', 'utf8');
   console.log('config.json length:', raw.length);
@@ -25,18 +25,19 @@ try {
   process.exit(1);
 }
 
-// ===== GITHUB AUTO-UPDATE CHECKER =====
+// ===== AUTO-REGISTER SLASH COMMANDS ON STARTUP =====
+await registerSlashCommands(); // respects cooldown in registerCommands.js
+
+// ===== GITHUB AUTO-UPDATE CHECKER (every 5 min) =====
 async function fetchLatestCommitSha() {
   const { owner, repo, branch, token: ghToken } = config.github || {};
   if (!owner || !repo || !branch) {
     console.log('ℹ️ GitHub check disabled: missing owner/repo/branch in config.json.github');
     return null;
   }
-
   const url = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(branch)}`;
   const headers = { 'User-Agent': 'discord-bot-auto-updater' };
   if (ghToken) headers.Authorization = `Bearer ${ghToken}`;
-
   const res = await fetch(url, { headers });
   if (!res.ok) {
     const txt = await res.text().catch(() => '');
@@ -46,33 +47,22 @@ async function fetchLatestCommitSha() {
   const data = await res.json();
   return data?.sha || null;
 }
-
-function readLastSha() {
-  try { return fs.readFileSync(LAST_FILE, 'utf8').trim(); }
-  catch { return null; }
-}
-
-function writeLastSha(sha) {
-  try { fs.writeFileSync(LAST_FILE, sha + '\n', 'utf8'); }
-  catch (e) { console.warn('⚠️ Could not write last SHA file:', e.message); }
-}
-
+function readLastSha() { try { return fs.readFileSync(LAST_FILE, 'utf8').trim(); } catch { return null; } }
+function writeLastSha(sha) { try { fs.writeFileSync(LAST_FILE, sha + '\n', 'utf8'); } catch (e) { console.warn('⚠️ Could not write last SHA file:', e.message); } }
 async function checkForUpdate() {
   try {
     const latest = await fetchLatestCommitSha();
     if (!latest) return;
     const prev = readLastSha();
-
     if (!prev) {
       writeLastSha(latest);
       console.log(`ℹ️ Tracking ${config.github.owner}/${config.github.repo}@${config.github.branch} (${latest.slice(0,7)})`);
       return;
     }
-
     if (latest !== prev) {
       console.log(`🆕 New commit detected (${prev.slice(0,7)} → ${latest.slice(0,7)}). Restarting to pull update...`);
       writeLastSha(latest);
-      process.exit(0); // triggers host restart/pull
+      process.exit(0); // your host should restart & pull latest
     } else {
       console.log('✅ No updates found.');
     }
@@ -80,10 +70,8 @@ async function checkForUpdate() {
     console.warn('⚠️ GitHub check failed:', err.message);
   }
 }
-
-// Start periodic GitHub checks
 setInterval(checkForUpdate, CHECK_INTERVAL_MS);
-setTimeout(checkForUpdate, 15_000); // first check shortly after startup
+setTimeout(checkForUpdate, 15_000);
 
 // ===== CREATE DISCORD CLIENT =====
 const client = new Client({
@@ -94,7 +82,7 @@ const client = new Client({
   ]
 });
 
-// ===== LOAD SLASH COMMANDS =====
+// ===== LOAD SLASH COMMAND HANDLERS FROM ./commands =====
 client.commands = new Collection();
 let cmdFiles = [];
 try {
@@ -102,7 +90,6 @@ try {
 } catch (e) {
   console.warn('ℹ️ No ./commands directory found yet – skipping dynamic loads.');
 }
-
 for (const file of cmdFiles) {
   try {
     const mod = await import(`./commands/${file}`);
@@ -112,9 +99,10 @@ for (const file of cmdFiles) {
   }
 }
 
+// ===== BOT LIFECYCLE =====
 client.once(Events.ClientReady, async (c) => {
   console.log(`✅ Logged in as ${c.user.tag}`);
-  await setupTwitchNotifier(client);
+  await setupTwitchNotifier(client); // background notifier
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
