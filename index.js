@@ -1,3 +1,6 @@
+// index.js
+// Simple Discord bot reading its token from config.json
+
 const fs = require('fs');
 const { Client, GatewayIntentBits, Events } = require('discord.js');
 
