@@ -1,21 +1,29 @@
 // index.js — main entry point (ESM)
 import fs from 'fs';
+console.log('Config file exists?', fs.existsSync('./config.json'));
 import { Client, GatewayIntentBits, Events, Collection } from 'discord.js';
 import { setupTwitchNotifier } from './commands/twitchNotifier.js';
 
-// ===== LOAD TOKEN =====
+// ===== LOAD TOKEN (with diagnostics) =====
 let token = null;
 try {
-  const config = JSON.parse(fs.readFileSync('./config.json', 'utf8'));
+  const raw = fs.readFileSync('./config.json', 'utf8');
+  console.log('config.json length:', raw.length);
+  // Show first 200 chars to catch weird characters
+  console.log('config.json preview:', raw.slice(0, 200));
+
+  const config = JSON.parse(raw);
   token = config.token?.trim();
-} catch {
-  console.error('❌ Missing config.json with bot token.');
+
+  if (!token) {
+    console.error('❌ No "token" field found or it is empty in config.json');
+    process.exit(1);
+  }
+} catch (err) {
+  console.error('❌ Failed to read/parse config.json:', err.message);
   process.exit(1);
 }
-if (!token) {
-  console.error('❌ No token found in config.json');
-  process.exit(1);
-}
+
 
 // ===== CREATE DISCORD CLIENT =====
 const client = new Client({
