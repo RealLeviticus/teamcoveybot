@@ -1,5 +1,20 @@
-import 'dotenv/config';
-import { Client, GatewayIntentBits, Events } from 'discord.js';
+const fs = require('fs');
+const { Client, GatewayIntentBits, Events } = require('discord.js');
+
+// Read token from config.json
+let token = null;
+try {
+  const config = JSON.parse(fs.readFileSync('./config.json', 'utf8'));
+  token = config.token?.trim();
+} catch {
+  console.error('❌ Missing config.json with bot token.');
+  process.exit(1);
+}
+
+if (!token) {
+  console.error('❌ No token found in config.json');
+  process.exit(1);
+}
 
 const client = new Client({
   intents: [
@@ -15,23 +30,7 @@ client.once(Events.ClientReady, c => {
 
 client.on(Events.MessageCreate, msg => {
   if (msg.author.bot) return;
-  if (msg.content === '!hello') {
-    msg.channel.send('Hi there! 👋');
-  }
+  if (msg.content === '!hello') msg.channel.send('Hi there! 👋');
 });
-
-client.on(Events.InteractionCreate, async interaction => {
-  if (!interaction.isChatInputCommand()) return;
-  if (interaction.commandName === 'hello') {
-    await interaction.reply('Hi there! 👋');
-  }
-});
-
-
-const token = process.env.DISCORD_TOKEN;
-if (!token) {
-  console.error('❌ Missing DISCORD_TOKEN env var');
-  process.exit(1);
-}
 
 client.login(token);
