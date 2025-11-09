@@ -3,6 +3,7 @@ import fs from 'fs';
 import { Client, GatewayIntentBits, Events, Collection } from 'discord.js';
 import { setupTwitchNotifier } from './commands/twitchNotifier.js';
 import { registerSlashCommands } from './registerCommands.js';
+import { setupAutoPublisher } from './background/autopublish.js';
 
 const CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const LAST_FILE = '.last-commit';
@@ -25,10 +26,10 @@ try {
   process.exit(1);
 }
 
-// ===== AUTO-REGISTER SLASH COMMANDS ON STARTUP =====
+// ===== AUTO-REGISTER SLASH COMMANDS =====
 await registerSlashCommands(); // respects cooldown in registerCommands.js
 
-// ===== GITHUB AUTO-UPDATE CHECKER (every 5 min) =====
+// ===== GITHUB AUTO-UPDATE CHECKER =====
 async function fetchLatestCommitSha() {
   const { owner, repo, branch, token: ghToken } = config.github || {};
   if (!owner || !repo || !branch) {
@@ -62,7 +63,7 @@ async function checkForUpdate() {
     if (latest !== prev) {
       console.log(`🆕 New commit detected (${prev.slice(0,7)} → ${latest.slice(0,7)}). Restarting to pull update...`);
       writeLastSha(latest);
-      process.exit(0); // your host should restart & pull latest
+      process.exit(0);
     } else {
       console.log('✅ No updates found.');
     }
@@ -78,16 +79,17 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
+    GatewayIntentBits.GuildMembers,   // required for role toggling
+    GatewayIntentBits.MessageContent  // keep only if Twitch notifier needs it
   ]
 });
 
-// ===== LOAD SLASH COMMAND HANDLERS FROM ./commands =====
+// ===== LOAD SLASH COMMAND HANDLERS =====
 client.commands = new Collection();
 let cmdFiles = [];
 try {
   cmdFiles = (await fs.promises.readdir('./commands')).filter(f => f.endsWith('.js'));
-} catch (e) {
+} catch {
   console.warn('ℹ️ No ./commands directory found yet – skipping dynamic loads.');
 }
 for (const file of cmdFiles) {
@@ -103,9 +105,21 @@ for (const file of cmdFiles) {
 client.once(Events.ClientReady, async (c) => {
   console.log(`✅ Logged in as ${c.user.tag}`);
   await setupTwitchNotifier(client); // background notifier
+  setupAutoPublisher(client);        // announcement auto-publisher
 });
 
+// ===== INTERACTION HANDLER =====
 client.on(Events.InteractionCreate, async (interaction) => {
+  // 1) Role panel buttons (non-slash)
+  try {
+    const rolePanel = await import('./commands/rolepanel.js');
+    if (typeof rolePanel.handleButton === 'function') {
+      const handled = await rolePanel.handleButton(interaction);
+      if (handled) return;
+    }
+  } catch {}
+
+  // 2) Slash commands
   if (!interaction.isChatInputCommand()) return;
   const command = client.commands.get(interaction.commandName);
   if (!command) return;
@@ -122,4 +136,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
+// ===== GLOBAL ERROR HANDLERS =====
+process.on('unhandledRejection', (r) => console.error('Unhandled rejection:', r));
+process.on('uncaughtException', (e) => { console.error('Uncaught exception:', e); process.exit(1); });
+
+// ===== LOGIN =====
 client.login(token);
