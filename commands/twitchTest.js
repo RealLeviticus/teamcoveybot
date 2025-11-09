@@ -1,5 +1,6 @@
-// commands/twitchTest.js (ESM)
+// commands/twitchtest.js
 import fs from 'fs';
+import { SlashCommandBuilder } from 'discord.js';
 
 async function getAppToken(clientId, clientSecret) {
   const res = await fetch('https://id.twitch.tv/oauth2/token', {
@@ -11,87 +12,64 @@ async function getAppToken(clientId, clientSecret) {
       grant_type: 'client_credentials'
     })
   });
-  if (!res.ok) {
-    const txt = await res.text().catch(() => '');
-    throw new Error(`Token request failed (${res.status}): ${txt.slice(0,200)}`);
-  }
+  if (!res.ok) throw new Error(`Token request failed (${res.status})`);
   const json = await res.json();
   return json.access_token;
 }
 
 async function fetchUserByLogin(clientId, appToken, login) {
   const res = await fetch(`https://api.twitch.tv/helix/users?login=${encodeURIComponent(login)}`, {
-    headers: {
-      'Client-ID': clientId,
-      'Authorization': `Bearer ${appToken}`
-    }
+    headers: { 'Client-ID': clientId, 'Authorization': `Bearer ${appToken}` }
   });
-  if (!res.ok) {
-    const txt = await res.text().catch(() => '');
-    throw new Error(`Users request failed (${res.status}): ${txt.slice(0,200)}`);
-  }
+  if (!res.ok) throw new Error(`Users request failed (${res.status})`);
   const json = await res.json();
   return Array.isArray(json.data) && json.data.length ? json.data[0] : null;
 }
 
-export function setupTwitchTestCommand(client) {
-  // Read Twitch config once
-  let twitchCfg = null;
+export const data = new SlashCommandBuilder()
+  .setName('twitchtest')
+  .setDescription('Test Twitch credentials and fetch a user')
+  .addStringOption(opt =>
+    opt.setName('login')
+      .setDescription('Twitch login to test (default: first in config)')
+      .setRequired(false)
+  );
+
+export async function execute(interaction) {
+  await interaction.deferReply({ ephemeral: true });
+
+  let cfg;
   try {
-    const raw = JSON.parse(fs.readFileSync('./config.json', 'utf8'));
-    twitchCfg = raw.twitch ?? null;
+    cfg = JSON.parse(fs.readFileSync('./config.json', 'utf8'));
   } catch {
-    console.log('ℹ️ twitchTest: no config.json found yet (command will show a helpful error).');
+    return interaction.editReply('⚠️ No config.json found.');
   }
 
-  client.on('messageCreate', async (msg) => {
-    if (msg.author.bot) return;
+  const t = cfg.twitch;
+  if (!t?.clientId || !t?.clientSecret || !Array.isArray(t?.channels) || t.channels.length === 0) {
+    return interaction.editReply(
+      '⚠️ Twitch not configured. Add this to config.json:\n' +
+      '```\n"twitch": { "clientId": "...", "clientSecret": "...", "channels": ["yourlogin"] }\n```'
+    );
+  }
 
-    // Usage:
-    //   !twitchtest           -> tests first configured channel
-    //   !twitchtest <login>   -> tests that specific Twitch login
-    if (!msg.content.toLowerCase().startsWith('!twitchtest')) return;
+  const login = (interaction.options.getString('login') || t.channels[0]).toLowerCase();
 
-    if (
-      !twitchCfg ||
-      !twitchCfg.clientId ||
-      !twitchCfg.clientSecret ||
-      !Array.isArray(twitchCfg.channels) ||
-      twitchCfg.channels.length === 0
-    ) {
-      await msg.channel.send(
-        '⚠️ Twitch test not configured. Please add to `config.json`:\n' +
-        '```\n"twitch": {\n  "clientId": "YOUR_TWITCH_CLIENT_ID",\n  "clientSecret": "YOUR_TWITCH_CLIENT_SECRET",\n  "channels": ["yourtwitchusername"]\n}\n```'
-      );
-      return;
-    }
+  try {
+    const appToken = await getAppToken(t.clientId, t.clientSecret);
+    const user = await fetchUserByLogin(t.clientId, appToken, login);
+    if (!user) return interaction.editReply(`❌ Credentials OK, but Twitch user \`${login}\` not found.`);
 
-    const parts = msg.content.trim().split(/\s+/);
-    const login = (parts[1] || twitchCfg.channels[0]).toLowerCase();
+    const summary =
+      `✅ **Credentials OK**\n` +
+      `• Login: **${user.login}**\n` +
+      `• Display: ${user.display_name}\n` +
+      `• ID: ${user.id}\n` +
+      (user.description ? `• Desc: ${user.description.slice(0,100)}${user.description.length>100?'…':''}\n` : '') +
+      `• Profile: https://twitch.tv/${user.login}`;
 
-    await msg.channel.send(`🔑 Testing Twitch credentials… (login: \`${login}\`)`);
-
-    try {
-      const token = await getAppToken(twitchCfg.clientId, twitchCfg.clientSecret);
-      const user  = await fetchUserByLogin(twitchCfg.clientId, token, login);
-
-      if (!user) {
-        await msg.channel.send(`❌ Credentials ok, but Twitch user \`${login}\` was not found.`);
-        return;
-      }
-
-      const summary =
-        `✅ **Credentials OK**\n` +
-        `• Login: **${user.login}**\n` +
-        `• Display: ${user.display_name}\n` +
-        `• ID: ${user.id}\n` +
-        (user.view_count != null ? `• Views: ${user.view_count}\n` : '') +
-        (user.description ? `• Desc: ${user.description.slice(0,100)}${user.description.length>100?'…':''}\n` : '') +
-        `• Profile: https://twitch.tv/${user.login}`;
-
-      await msg.channel.send(summary);
-    } catch (e) {
-      await msg.channel.send(`❌ Twitch test failed: ${e.message}`);
-    }
-  });
+    await interaction.editReply(summary);
+  } catch (e) {
+    await interaction.editReply(`❌ Twitch test failed: ${e.message}`);
+  }
 }
