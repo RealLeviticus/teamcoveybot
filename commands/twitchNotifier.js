@@ -77,7 +77,7 @@ export async function setupTwitchNotifier(client) {
   async function _sendTwitchNotification(login, title, channel) {
     const url = `https://twitch.tv/${login}`;
     const mention = twitchCfg.roleId ? `<@&${twitchCfg.roleId}> ` : '';
-    await channel.send(`${mention}🔴 **${login}** is LIVE: **${title || 'Live now!'}**\n${url}`);
+    await channel.send(  `${mention}✈️ **${login}** is now boarding for **${title || 'a new stream'}**\n${url}`);
   }
 
   async function notifyIfLive(channel) {
