@@ -22,7 +22,7 @@ const ALLOWED_ROLE_IDS = Array.isArray(config.allowedRoleIds) ? config.allowedRo
 
 // ====== Roles users can self-assign ======
 const ROLES = [
-  // { id: '123456789012345678', label: 'Announcements' },
+{ id: '1065935123561857044', label: 'Announcements' },
   // { id: '234567890123456789', label: 'Events' },
 ];
 
